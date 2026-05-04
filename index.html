@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ChessStudio</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react/18.2.0/umd/react.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.2.0/umd/react-dom.production.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: #1A1A18; display: flex; justify-content: center; }
+  #root { width: 100%; max-width: 900px; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  ::-webkit-scrollbar { width: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 2px; }
+  input[type=range] { accent-color: #97C459; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useCallback, useRef } = React;
+
+const PIECES = {
+  wK:"♔", wQ:"♕", wR:"♖", wB:"♗", wN:"♘", wP:"♙",
+  bK:"♚", bQ:"♛", bR:"♜", bB:"♝", bN:"♞", bP:"♟"
+};
+
+const INIT_BOARD = [
+  ["bR","bN","bB","bQ","bK","bB","bN","bR"],
+  ["bP","bP","bP","bP","bP","bP","bP","bP"],
+  [null,null,null,null,null,null,null,null],
+  [null,null,null,null,null,null,null,null],
+  [null,null,null,null,null,null,null,null],
+  [null,null,null,null,null,null,null,null],
+  ["wP","wP","wP","wP","wP","wP","wP","wP"],
+  ["wR","wN","wB","wQ","wK","wB","wN","wR"],
+];
+
+const FILES = ["a","b","c","d","e","f","g","h"];
+const RANKS = ["8","7","6","5","4","3","2","1"];
+
+const DEMO_MOVES = [
+  {w:"e4",b:"e5"},{w:"Nf3",b:"Nc6"},{w:"Bb5",b:"a6"},
+  {w:"Ba4",b:"Nf6"},{w:"O-O",b:"Be7"},{w:"Re1",b:"b5"},
+  {w:"Bb3",b:"d6"},{w:"c3",b:"O-O"},{w:"h3",b:"Nb8"},
+];
+
+function getLegalMoves(board, row, col) {
+  const piece = board[row][col];
+  if (!piece) return [];
+  const color = piece[0];
+  const type = piece[1];
+  const moves = [];
+  const opp = color === "w" ? "b" : "w";
+
+  const add = (r, c) => {
+    if (r < 0 || r > 7 || c < 0 || c > 7) return false;
+    const target = board[r][c];
+    if (target && target[0] === color) return false;
+    moves.push([r, c]);
+    return !target;
+  };
+
+  const slide = (dr, dc) => {
+    let r = row + dr, c = col + dc;
+    while (r >= 0 && r <= 7 && c >= 0 && c <= 7) {
+      if (!add(r, c)) break;
+      r += dr; c += dc;
+    }
+  };
+
+  if (type === "P") {
+    const dir = color === "w" ? -1 : 1;
+    const startRow = color === "w" ? 6 : 1;
+    if (!board[row + dir]?.[col]) {
+      moves.push([row + dir, col]);
+      if (row === startRow && !board[row + dir * 2]?.[col])
+        moves.push([row + dir * 2, col]);
+    }
+    [-1, 1].forEach(dc => {
+      const target = board[row + dir]?.[col + dc];
+      if (target && target[0] === opp) moves.push([row + dir, col + dc]);
+    });
+  } else if (type === "N") {
+    [[-2,-1],[-2,1],[-1,-2],[-1,2],[1,-2],[1,2],[2,-1],[2,1]].forEach(([dr,dc]) => add(row+dr, col+dc));
+  } else if (type === "B") {
+    [[-1,-1],[-1,1],[1,-1],[1,1]].forEach(([dr,dc]) => slide(dr, dc));
+  } else if (type === "R") {
+    [[-1,0],[1,0],[0,-1],[0,1]].forEach(([dr,dc]) => slide(dr, dc));
+  } else if (type === "Q") {
+    [[-1,-1],[-1,1],[1,-1],[1,1],[-1,0],[1,0],[0,-1],[0,1]].forEach(([dr,dc]) => slide(dr, dc));
+  } else if (type === "K") {
+    [[-1,-1],[-1,0],[-1,1],[0,-1],[0,1],[1,-1],[1,0],[1,1]].forEach(([dr,dc]) => add(row+dr, col+dc));
+  }
+  return moves;
+}
+
+function applyMove(board, fromR, fromC, toR, toC) {
+  const next = board.map(r => [...r]);
+  next[toR][toC] = next[fromR][fromC];
+  next[fromR][fromC] = null;
+  if (next[toR][toC] === "wP" && toR === 0) next[toR][toC] = "wQ";
+  if (next[toR][toC] === "bP" && toR === 7) next[toR][toC] = "bQ";
+  return next;
+}
+
+function isInCheck(board, color) {
+  let kingR = -1, kingC = -1;
+  for (let r = 0; r < 8; r++)
+    for (let c = 0; c < 8; c++)
+      if (board[r][c] === color + "K") { kingR = r; kingC = c; }
+  const opp = color === "w" ? "b" : "w";
+  for (let r = 0; r < 8; r++)
+    for (let c = 0; c < 8; c++)
+      if (board[r][c]?.[0] === opp) {
+        const ms = getLegalMoves(board, r, c);
+        if (ms.some(([mr, mc]) => mr === kingR && mc === kingC)) return true;
+      }
+  return false;
+}
+
+function formatTime(secs) {
+  const m = Math.floor(secs / 60);
+  const s = secs % 60;
+  return `${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+}
+
+const MODES = ["Online","vs CPU","Local"];
+const THEMES = [
+  { name:"Classic", light:"#F0D9B5", dark:"#B58863" },
+  { name:"Ocean",   light:"#DEE9F0", dark:"#4A7FA5" },
+  { name:"Forest",  light:"#E8F0D8", dark:"#5A7A3A" },
+  { name:"Dusk",    light:"#E8D8E8", dark:"#7A4A7A" },
+];
+
+function PlayerBar({ name, rating, color, time, active, captured }) {
+  return (
+    <div style={{
+      display:"flex", alignItems:"center", gap:10,
+      padding:"8px 12px", background:"#111110", borderRadius:10,
+      border: active ? "0.5px solid rgba(151,196,89,0.4)" : "0.5px solid rgba(255,255,255,0.07)",
+      transition:"border-color 0.3s",
+    }}>
+      <div style={{
+        width:34, height:34, borderRadius:"50%", flexShrink:0,
+        background: color==="w" ? "rgba(240,217,181,0.15)" : "rgba(44,44,42,0.8)",
+        border:`1.5px solid ${color==="w" ? "rgba(240,217,181,0.3)" : "rgba(255,255,255,0.1)"}`,
+        display:"flex", alignItems:"center", justifyContent:"center", fontSize:18,
+      }}>{color==="w" ? "♔" : "♚"}</div>
+      <div style={{ flex:1 }}>
+        <div style={{ fontSize:13, fontWeight:500, color:"#E8E4D8" }}>{name}</div>
+        <div style={{ fontSize:11, color:"rgba(255,255,255,0.35)", fontFamily:"monospace" }}>
+          {rating} Rapid
+          {captured.length > 0 && <span style={{marginLeft:6}}>{captured.map(p => PIECES[p]).join("")}</span>}
+        </div>
+      </div>
+      <div style={{
+        fontFamily:"monospace", fontSize:18, fontWeight:500,
+        background: active ? "rgba(151,196,89,0.15)" : "rgba(255,255,255,0.05)",
+        color: active ? "#97C459" : "rgba(255,255,255,0.5)",
+        padding:"4px 10px", borderRadius:8, minWidth:64, textAlign:"center",
+        transition:"all 0.3s", border: active ? "0.5px solid rgba(151,196,89,0.3)" : "0.5px solid transparent",
+      }}>{formatTime(time)}</div>
+    </div>
+  );
+}
+
+function StatusBadge({ status, turn }) {
+  const cfg = {
+    playing:   { text: turn==="w" ? "White to move" : "Black to move", dot:"#63A022" },
+    check:     { text: (turn==="w" ? "White" : "Black") + " in check!", dot:"#EF9F27" },
+    checkmate: { text: (turn==="w" ? "Black" : "White") + " wins!", dot:"#E24B4A" },
+    draw:      { text:"Draw", dot:"rgba(255,255,255,0.3)" },
+  }[status] || { text:"Playing", dot:"#63A022" };
+
+  return (
+    <div style={{ display:"flex", alignItems:"center", gap:7 }}>
+      <div style={{ width:7, height:7, borderRadius:"50%", background:cfg.dot, animation: status==="playing" ? "pulse 2s infinite" : "none" }} />
+      <span style={{ fontSize:13, fontWeight:500, color: status==="checkmate" ? "#E24B4A" : status==="check" ? "#EF9F27" : "rgba(255,255,255,0.8)" }}>
+        {cfg.text}
+      </span>
+    </div>
+  );
+}
+
+function MoveRow({ num, white, black, isLive }) {
+  return (
+    <>
+      <span style={{ fontSize:11, color:"rgba(255,255,255,0.25)", fontFamily:"monospace", padding:"2px 4px 2px 0" }}>{num}.</span>
+      <span style={{ fontSize:12, fontFamily:"monospace", padding:"2px 6px", borderRadius:4, color: isLive ? "#E8E4D8" : "rgba(255,255,255,0.4)", cursor:"pointer" }}>{white}</span>
+      <span style={{ fontSize:12, fontFamily:"monospace", padding:"2px 6px", borderRadius:4, color: isLive ? "rgba(255,255,255,0.6)" : "rgba(255,255,255,0.3)", cursor:"pointer" }}>{black||""}</span>
+    </>
+  );
+}
+
+function Btn({ children, onClick, accent }) {
+  return (
+    <button onClick={onClick} style={{
+      padding:"7px 10px", borderRadius:8,
+      border:`0.5px solid ${accent ? "rgba(151,196,89,0.4)" : "rgba(255,255,255,0.1)"}`,
+      background: accent ? "rgba(151,196,89,0.12)" : "transparent",
+      color: accent ? "#97C459" : "rgba(255,255,255,0.55)",
+      fontSize:12, fontWeight:500, cursor:"pointer", fontFamily:"inherit",
+    }}>{children}</button>
+  );
+}
+
+function ChessGame() {
+  const [board, setBoard] = useState(INIT_BOARD.map(r => [...r]));
+  const [selected, setSelected] = useState(null);
+  const [legalMoves, setLegalMoves] = useState([]);
+  const [turn, setTurn] = useState("w");
+  const [moves, setMoves] = useState([]);
+  const [lastMove, setLastMove] = useState(null);
+  const [gameStatus, setGameStatus] = useState("playing");
+  const [mode, setMode] = useState("Local");
+  const [depth, setDepth] = useState(12);
+  const [themeIdx, setThemeIdx] = useState(0);
+  const [wTime, setWTime] = useState(600);
+  const [bTime, setBTime] = useState(600);
+  const [timerActive, setTimerActive] = useState(false);
+  const [navIdx, setNavIdx] = useState(null);
+  const [boardHistory, setBoardHistory] = useState([INIT_BOARD.map(r => [...r])]);
+  const [capturedW, setCapturedW] = useState([]);
+  const [capturedB, setCapturedB] = useState([]);
+  const [evalScore, setEvalScore] = useState(0.0);
+  const timerRef = useRef(null);
+  const theme = THEMES[themeIdx];
+
+  useEffect(() => {
+    if (timerActive && gameStatus === "playing") {
+      timerRef.current = setInterval(() => {
+        if (turn === "w") setWTime(t => Math.max(0, t - 1));
+        else setBTime(t => Math.max(0, t - 1));
+      }, 1000);
+    }
+    return () => clearInterval(timerRef.current);
+  }, [timerActive, turn, gameStatus]);
+
+  const handleSquareClick = useCallback((r, c) => {
+    if (gameStatus !== "playing" || navIdx !== null) return;
+    if (selected) {
+      const isLegal = legalMoves.some(([lr, lc]) => lr === r && lc === c);
+      if (isLegal) {
+        const captured = board[r][c];
+        const newBoard = applyMove(board, selected[0], selected[1], r, c);
+        const nextTurn = turn === "w" ? "b" : "w";
+        const inCheck = isInCheck(newBoard, nextTurn);
+        let hasAnyMove = false;
+        for (let pr = 0; pr < 8 && !hasAnyMove; pr++)
+          for (let pc = 0; pc < 8 && !hasAnyMove; pc++)
+            if (newBoard[pr][pc]?.[0] === nextTurn)
+              if (getLegalMoves(newBoard, pr, pc).length > 0) hasAnyMove = true;
+
+        const moveStr = (PIECES[board[selected[0]][selected[1]]] || "") +
+          FILES[selected[1]] + RANKS[selected[0]] + (captured ? "x" : "-") +
+          FILES[c] + RANKS[r] + (inCheck ? "+" : "");
+
+        setBoard(newBoard);
+        setBoardHistory(h => [...h, newBoard]);
+        setLastMove([selected, [r, c]]);
+        setTurn(nextTurn);
+        setTimerActive(true);
+        setSelected(null);
+        setLegalMoves([]);
+        if (captured) {
+          if (captured[0] === "w") setCapturedW(cp => [...cp, captured]);
+          else setCapturedB(cp => [...cp, captured]);
+        }
+        setMoves(prev => {
+          const last = prev[prev.length - 1];
+          if (!last || last.b !== undefined) return [...prev, { w: moveStr }];
+          return [...prev.slice(0, -1), { ...last, b: moveStr }];
+        });
+        if (!hasAnyMove) setGameStatus(inCheck ? "checkmate" : "draw");
+        else if (inCheck) setGameStatus("check");
+        else setGameStatus("playing");
+        setEvalScore(prev => prev + (Math.random() - 0.5) * 0.4);
+        return;
+      }
+      if (selected[0] === r && selected[1] === c) { setSelected(null); setLegalMoves([]); return; }
+    }
+    const piece = board[r][c];
+    if (piece && piece[0] === turn) {
+      setSelected([r, c]);
+      setLegalMoves(getLegalMoves(board, r, c));
+    } else {
+      setSelected(null);
+      setLegalMoves([]);
+    }
+  }, [board, selected, legalMoves, turn, gameStatus, navIdx]);
+
+  const navigate = (dir) => {
+    const maxIdx = boardHistory.length - 1;
+    const current = navIdx ?? maxIdx;
+    const next = Math.max(0, Math.min(maxIdx, current + dir));
+    setNavIdx(next === maxIdx ? null : next);
+  };
+
+  const resetGame = () => {
+    const fresh = INIT_BOARD.map(r => [...r]);
+    setBoard(fresh); setBoardHistory([fresh]); setSelected(null); setLegalMoves([]);
+    setTurn("w"); setMoves([]); setLastMove(null); setGameStatus("playing");
+    setWTime(600); setBTime(600); setTimerActive(false); setNavIdx(null);
+    setCapturedW([]); setCapturedB([]); setEvalScore(0);
+  };
+
+  const displayBoard = navIdx !== null ? boardHistory[navIdx] : board;
+  const evalPct = Math.round(50 + Math.min(Math.max(evalScore * 6, -48), 48));
+
+  const squareStyle = (r, c) => {
+    const isLight = (r + c) % 2 === 0;
+    const isSelected = selected && selected[0] === r && selected[1] === c;
+    const isLastMoveFrom = lastMove && lastMove[0][0] === r && lastMove[0][1] === c;
+    const isLastMoveTo = lastMove && lastMove[1][0] === r && lastMove[1][1] === c;
+    const isCheck = gameStatus === "check" || gameStatus === "checkmate";
+    let bg = isLight ? theme.light : theme.dark;
+    if (isSelected) bg = "#F6F669";
+    else if (isLastMoveFrom || isLastMoveTo) bg = isLight ? "#CDD26E" : "#AAAA44";
+    return {
+      background: bg, position:"relative", display:"flex", alignItems:"center", justifyContent:"center",
+      cursor:"pointer", userSelect:"none",
+      outline: isCheck && displayBoard[r][c] === turn + "K" ? "2px solid #E24B4A" : "none",
+    };
+  };
+
+  return (
+    <div style={{ fontFamily:"'Segoe UI', sans-serif", background:"#1A1A18", minHeight:"100vh", display:"flex", flexDirection:"column", color:"#E8E4D8" }}>
+      {/* Top bar */}
+      <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", padding:"12px 24px", background:"#111110", borderBottom:"0.5px solid rgba(255,255,255,0.08)" }}>
+        <div style={{ fontFamily:"Georgia, serif", fontSize:22, fontWeight:600, letterSpacing:-0.5 }}>
+          Chess<span style={{ color:"#97C459" }}>Studio</span>
+        </div>
+        <div style={{ display:"flex", gap:4 }}>
+          {MODES.map(m => (
+            <button key={m} onClick={() => setMode(m)} style={{
+              padding:"5px 14px", borderRadius:8, border:"0.5px solid",
+              borderColor: mode===m ? "#97C459" : "rgba(255,255,255,0.15)",
+              background: mode===m ? "rgba(151,196,89,0.15)" : "transparent",
+              color: mode===m ? "#97C459" : "rgba(255,255,255,0.5)",
+              fontSize:12, fontWeight: mode===m ? 500 : 400, cursor:"pointer", fontFamily:"inherit",
+            }}>{m}</button>
+          ))}
+        </div>
+        <div style={{ display:"flex", alignItems:"center", gap:8 }}>
+          <div style={{ width:7, height:7, borderRadius:"50%", background:"#63A022", animation:"pulse 2s infinite" }} />
+          <span style={{ fontSize:12, color:"rgba(255,255,255,0.4)" }}>1,247 online</span>
+        </div>
+      </div>
+
+      {/* Main */}
+      <div style={{ display:"flex", gap:20, padding:"20px 24px", flex:1, flexWrap:"wrap" }}>
+        {/* Board column */}
+        <div style={{ display:"flex", flexDirection:"column", gap:10, flex:"0 0 auto" }}>
+          <PlayerBar name="Opponent" rating={1843} color="b" time={bTime} active={turn==="b" && timerActive} captured={capturedW} />
+          <div style={{ background:"#111110", borderRadius:12, padding:12, border:"0.5px solid rgba(255,255,255,0.08)" }}>
+            <div style={{ display:"grid", gridTemplateColumns:"repeat(8,1fr)", width:"min(480px, 90vw)", aspectRatio:"1", borderRadius:4, overflow:"hidden" }}>
+              {Array.from({ length:64 }, (_, i) => {
+                const r = Math.floor(i / 8), c = i % 8;
+                const piece = displayBoard[r][c];
+                const isLegal = legalMoves.some(([lr, lc]) => lr === r && lc === c);
+                return (
+                  <div key={i} style={squareStyle(r, c)} onClick={() => handleSquareClick(r, c)}>
+                    {piece && <span style={{ fontSize:"min(34px, 9vw)", lineHeight:1, filter: piece[0]==="w" ? "drop-shadow(0 1px 1px rgba(0,0,0,0.4))" : "drop-shadow(0 1px 2px rgba(0,0,0,0.6))", zIndex:1 }}>{PIECES[piece]}</span>}
+                    {isLegal && !piece && <div style={{ position:"absolute", width:"32%", height:"32%", borderRadius:"50%", background:"rgba(0,0,0,0.18)", zIndex:2 }} />}
+                    {isLegal && piece && <div style={{ position:"absolute", inset:0, borderRadius:"50%", border:"3px solid rgba(0,0,0,0.25)", zIndex:2 }} />}
+                    {r===7 && <span style={{ position:"absolute", bottom:2, right:3, fontSize:9, fontFamily:"monospace", color:(r+c)%2===0 ? theme.dark : theme.light, opacity:0.8 }}>{FILES[c]}</span>}
+                    {c===0 && <span style={{ position:"absolute", top:2, left:3, fontSize:9, fontFamily:"monospace", color:(r+c)%2===0 ? theme.dark : theme.light, opacity:0.8 }}>{RANKS[r]}</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+          <PlayerBar name="You" rating={1712} color="w" time={wTime} active={turn==="w" && timerActive} captured={capturedB} />
+          <div style={{ display:"flex", gap:6, justifyContent:"center" }}>
+            {THEMES.map((t, i) => (
+              <button key={t.name} onClick={() => setThemeIdx(i)} title={t.name} style={{
+                width:24, height:24, borderRadius:6,
+                border: i===themeIdx ? "2px solid #97C459" : "1.5px solid rgba(255,255,255,0.1)",
+                background:`linear-gradient(135deg, ${t.light} 50%, ${t.dark} 50%)`,
+                cursor:"pointer", padding:0,
+              }} />
+            ))}
+          </div>
+        </div>
+
+        {/* Sidebar */}
+        <div style={{ display:"flex", flexDirection:"column", gap:12, flex:1, minWidth:220, maxWidth:280 }}>
+          <div style={{ background:"#111110", borderRadius:12, padding:"12px 14px", border:"0.5px solid rgba(255,255,255,0.08)" }}>
+            <div style={{ fontSize:10, letterSpacing:"0.07em", textTransform:"uppercase", color:"rgba(255,255,255,0.35)", marginBottom:6 }}>Status</div>
+            <StatusBadge status={gameStatus} turn={turn} />
+          </div>
+
+          <div style={{ background:"#111110", borderRadius:12, padding:"12px 14px", border:"0.5px solid rgba(255,255,255,0.08)" }}>
+            <div style={{ fontSize:10, letterSpacing:"0.07em", textTransform:"uppercase", color:"rgba(255,255,255,0.35)", marginBottom:8 }}>Engine evaluation</div>
+            <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:6 }}>
+              <div style={{ flex:1, height:8, background:"rgba(255,255,255,0.08)", borderRadius:4, overflow:"hidden" }}>
+                <div style={{ height:"100%", width:`${evalPct}%`, background:"#E8E4D8", borderRadius:4, transition:"width 0.6s ease" }} />
+              </div>
+              <span style={{ fontFamily:"monospace", fontSize:12, fontWeight:500, minWidth:42, textAlign:"right", color: evalScore>0 ? "#E8E4D8" : "#97C459" }}>
+                {evalScore > 0 ? "+" : ""}{evalScore.toFixed(1)}
+              </span>
+            </div>
+            <div style={{ fontSize:11, color:"rgba(255,255,255,0.3)", fontFamily:"monospace" }}>Nf3 d5 c4 e6 Nc3 Nf6</div>
+            {mode === "vs CPU" && (
+              <div style={{ display:"flex", alignItems:"center", gap:8, marginTop:8 }}>
+                <span style={{ fontSize:11, color:"rgba(255,255,255,0.35)", minWidth:50 }}>Depth {depth}</span>
+                <input type="range" min={1} max={20} value={depth} step={1} onChange={e => setDepth(Number(e.target.value))} style={{ flex:1 }} />
+              </div>
+            )}
+          </div>
+
+          <div style={{ background:"#111110", borderRadius:12, padding:"12px 14px", border:"0.5px solid rgba(255,255,255,0.08)", flex:1 }}>
+            <div style={{ fontSize:10, letterSpacing:"0.07em", textTransform:"uppercase", color:"rgba(255,255,255,0.35)", marginBottom:8 }}>Move history</div>
+            <div style={{ display:"grid", gridTemplateColumns:"auto 1fr 1fr", gap:1, maxHeight:200, overflowY:"auto" }}>
+              {(moves.length > 0 ? moves : DEMO_MOVES).map((m, i) => (
+                <MoveRow key={i} num={i+1} white={m.w} black={m.b} isLive={moves.length > 0} />
+              ))}
+            </div>
+          </div>
+
+          <div style={{ background:"#111110", borderRadius:12, padding:"12px 14px", border:"0.5px solid rgba(255,255,255,0.08)" }}>
+            <div style={{ display:"grid", gridTemplateColumns:"1fr 1fr", gap:6 }}>
+              <Btn onClick={() => navigate(-1)}>← Prev</Btn>
+              <Btn onClick={() => navigate(1)}>Next →</Btn>
+              <Btn onClick={resetGame} accent={true}>New Game</Btn>
+              <Btn onClick={() => alert("PGN export coming soon!")}>Export PGN</Btn>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<ChessGame />);
+</script>
+</body>
+</html>
